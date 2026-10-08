@@ -1,0 +1,17 @@
+{
+  "name": "Illustrative Survival: Day Endless opening formation",
+  "version": 1,
+  "mode_id": 11,
+  "goal": "Illustrative opening formation only; not verified and not a winning strategy. Replan from fresh state and stop before the bounded horizon.",
+  "cards": ["sunflower", "peashooter", "wallnut", "squash", "potato_mine", "cherry_bomb", "jalapeno", "pumpkin", "repeater", "winter_melon"],
+  "layers": {"lily": [], "pot": [], "pumpkin": [], "upgrade": ["repeater", "winter_melon"]},
+  "prerequisites": ["Survival: Day Endless must be available in this save", "Every listed card must be unlocked and present in the live seed chooser"],
+  "horizon_ticks": 2400,
+  "actions": [
+    {"action": {"type": "choose_cards", "plants": ["sunflower", "peashooter", "wallnut", "squash", "potato_mine", "cherry_bomb", "jalapeno", "pumpkin", "repeater", "winter_melon"]}},
+    {"action": {"type": "start_level"}},
+    {"action": {"type": "plant", "slot": 1, "row": 2, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 50}]},
+    {"action": {"type": "plant", "slot": 1, "row": 4, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 50}]},
+    {"action": {"type": "plant", "slot": 2, "row": 3, "col": 3}, "when": [{"field": "sun", "op": "gte", "value": 100}]}
+  ]
+}

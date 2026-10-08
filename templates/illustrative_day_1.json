@@ -1,0 +1,15 @@
+{
+  "name": "Illustrative opening sequence",
+  "version": 1,
+  "mode_id": "adventure",
+  "goal": "Illustrative opening; continue to replan from live state until the mode reports completion.",
+  "cards": ["sunflower", "peashooter", "wallnut"],
+  "layers": {"lily": [], "pot": [], "pumpkin": [], "upgrade": []},
+  "prerequisites": ["Select only plants unlocked in this save"],
+  "horizon_ticks": 1800,
+  "actions": [
+    {"action": {"type": "choose_cards", "plants": ["sunflower", "peashooter", "wallnut"]}},
+    {"action": {"type": "start_level"}},
+    {"action": {"type": "plant", "slot": 1, "row": 3, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 50}]}
+  ]
+}

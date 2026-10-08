@@ -1,0 +1,20 @@
+{
+  "name": "Illustrative Survival: Pool Endless opening formation",
+  "version": 1,
+  "mode_id": 13,
+  "goal": "Illustrative opening formation only; not verified and not a winning strategy. Water-lane actions need a lily pad underneath before planting the chosen plant.",
+  "cards": ["lily_pad", "sunflower", "peashooter", "wallnut", "squash", "potato_mine", "cherry_bomb", "pumpkin", "repeater", "cattail"],
+  "layers": {"lily": ["lily_pad"], "pot": [], "pumpkin": [], "upgrade": ["repeater", "cattail"]},
+  "prerequisites": ["Survival: Pool Endless must be available in this save", "Every listed card must be unlocked and present in the live seed chooser", "Use lily pads first in water lanes; a plant layer cannot replace its prerequisite"],
+  "horizon_ticks": 2400,
+  "actions": [
+    {"action": {"type": "choose_cards", "plants": ["lily_pad", "sunflower", "peashooter", "wallnut", "squash", "potato_mine", "cherry_bomb", "pumpkin", "repeater", "cattail"]}},
+    {"action": {"type": "start_level"}},
+    {"action": {"type": "plant", "slot": 1, "row": 3, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 25}]},
+    {"action": {"type": "plant", "slot": 2, "row": 3, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 50}]},
+    {"action": {"type": "plant", "slot": 1, "row": 4, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 25}]},
+    {"action": {"type": "plant", "slot": 2, "row": 4, "col": 1}, "when": [{"field": "sun", "op": "gte", "value": 50}]},
+    {"action": {"type": "plant", "slot": 3, "row": 3, "col": 3}, "when": [{"field": "sun", "op": "gte", "value": 100}]},
+    {"action": {"type": "plant", "slot": 3, "row": 4, "col": 3}, "when": [{"field": "sun", "op": "gte", "value": 100}]}
+  ]
+}
