@@ -39,6 +39,17 @@ def collect(destination: Path) -> int:
             if target.exists():
                 raise RuntimeError(f"Duplicate license destination: {target}")
             shutil.copy2(source, target)
+            if name.casefold() == "pywin32" and source.name.casefold() == "notice.md":
+                notice = target.read_text(encoding="utf-8")
+                target.write_text(notice.replace("../../License.txt", "pywin32-License.txt"), encoding="utf-8")
+            count += 1
+        if name.casefold() == "pywin32":
+            license_file = next((Path(dist.locate_file(relative)) for relative in dist.files or ()
+                                 if str(relative).replace("\\", "/").casefold().endswith(
+                                     "licenses/win32/license.txt")), None)
+            if license_file is None or not license_file.is_file():
+                raise RuntimeError("The pywin32 main License.txt was not found.")
+            shutil.copy2(license_file, destination / "pywin32-License.txt")
             count += 1
     if count < 2:
         raise RuntimeError("No Python dependency license texts were collected.")

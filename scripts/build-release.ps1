@@ -13,6 +13,7 @@ $releaseRoot = Join-Path $projectRoot 'build\release'
 $stageRoot = Join-Path $releaseRoot 'dist\pvz-ai'
 $workRoot = Join-Path $releaseRoot 'work'
 $licenseRoot = Join-Path $releaseRoot 'inputs\licenses'
+$documentStageRoot = Join-Path $releaseRoot 'inputs\documents'
 $python = if ($PythonExe) { $PythonExe } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }
 
 function Assert-WithinProject([string] $Path, [string] $Boundary) {
@@ -74,13 +75,43 @@ if (Test-Path -LiteralPath $licenseRoot) {
     if ($resolvedLicenseRoot -ne [IO.Path]::GetFullPath($licenseRoot)) { throw "Unexpected license staging path: $resolvedLicenseRoot" }
     Remove-Item -LiteralPath $resolvedLicenseRoot -Recurse -Force
 }
+if (Test-Path -LiteralPath $documentStageRoot) {
+    Assert-WithinProject $documentStageRoot (Join-Path $projectRoot 'build\release')
+    $resolvedDocumentStage = (Resolve-Path -LiteralPath $documentStageRoot).Path
+    if ($resolvedDocumentStage -ne [IO.Path]::GetFullPath($documentStageRoot)) { throw "Unexpected document staging path: $resolvedDocumentStage" }
+    Remove-Item -LiteralPath $resolvedDocumentStage -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path (Split-Path $stageRoot -Parent), $workRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $licenseRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $licenseRoot, $documentStageRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $licenseRoot 'native\minhook'), (Join-Path $licenseRoot 'native\nlohmann') | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\vendor\minhook\LICENSE.txt') `
     -Destination (Join-Path $licenseRoot 'native\minhook\LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\vendor\nlohmann\LICENSE.MIT') `
     -Destination (Join-Path $licenseRoot 'native\nlohmann\LICENSE.MIT')
+
+$curatedDocuments = @(
+    'README.md', 'INTERFACE.md', 'VALIDATION.md',
+    'docs\README.en.md', 'docs\README.zh-CN.md', 'docs\AI_GUIDE.md',
+    'docs\HUMAN_OPERATIONS.en.md', 'docs\HUMAN_OPERATIONS.zh-CN.md',
+    'docs\RELEASE_NOTES.md', 'docs\TEMPLATES.zh-CN.md',
+    'docs\LEVEL_CATALOG.zh-CN.md', 'docs\ENTITY_LAYOUT.md',
+    'docs\SOURCE_REFERENCES.md'
+)
+foreach ($document in $curatedDocuments) {
+    $source = Join-Path $projectRoot $document
+    $relative = $document
+    $target = Join-Path (Join-Path $documentStageRoot (Split-Path $relative -Parent)) (Split-Path $relative -Leaf)
+    New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+    $contents = [IO.File]::ReadAllText($source, [Text.Encoding]::UTF8)
+    # Keep source references actionable without distributing implementation files.
+    $nativeSourceLink = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($match)
+        $relativeSource = $match.Groups[2].Value.Replace('\', '/')
+        return "[$($match.Groups[1].Value)](https://github.com/yqz314159265-cyber/pvz-ai-bridge/blob/v0.1.0/native/src/$relativeSource)"
+    }
+    $contents = [regex]::Replace($contents, '\[([^\]]+)\]\((?:\.\./)*native/src/([^)]+)\)', $nativeSourceLink)
+    [IO.File]::WriteAllText($target, $contents, [Text.UTF8Encoding]::new($false))
+}
 
 & $python (Join-Path $projectRoot 'packaging\collect_licenses.py') $licenseRoot
 if ($LASTEXITCODE -ne 0) { throw "License collection failed with exit code $LASTEXITCODE." }
@@ -95,23 +126,18 @@ $arguments = @(
     '--distpath', (Join-Path $releaseRoot 'dist'), '--workpath', $workRoot,
     '--specpath', (Join-Path $releaseRoot 'spec'),
     '--add-binary', "$nativeDll;native", '--add-binary', "$nativeInjector;native",
+    '--add-data', "$(Join-Path $projectRoot 'native\vendor\minhook\LICENSE.txt');native\vendor\minhook",
+    '--add-data', "$(Join-Path $projectRoot 'native\vendor\nlohmann\LICENSE.MIT');native\vendor\nlohmann",
     '--add-data', "$(Join-Path $projectRoot 'templates');templates",
     '--add-data', "$(Join-Path $projectRoot 'skills\pvz-play');skills\pvz-play",
-    '--add-data', "$(Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md');docs",
+    '--add-data', "$(Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md');.",
+    '--add-data', "$(Join-Path $documentStageRoot 'README.md');.",
+    '--add-data', "$(Join-Path $documentStageRoot 'INTERFACE.md');.",
+    '--add-data', "$(Join-Path $documentStageRoot 'VALIDATION.md');.",
+    '--add-data', "$(Join-Path $documentStageRoot 'docs');docs",
     '--add-data', "$licenseRoot;licenses",
     (Join-Path $projectRoot 'packaging\entrypoint.py')
 )
-foreach ($document in @(
-    'README.md', 'INTERFACE.md', 'VALIDATION.md',
-    'docs\README.en.md', 'docs\README.zh-CN.md', 'docs\AI_GUIDE.md',
-    'docs\HUMAN_OPERATIONS.en.md', 'docs\HUMAN_OPERATIONS.zh-CN.md',
-    'docs\RELEASE_NOTES.md', 'docs\TEMPLATES.zh-CN.md',
-    'docs\LEVEL_CATALOG.zh-CN.md', 'docs\ENTITY_LAYOUT.md',
-    'docs\SOURCE_REFERENCES.md'
-)) {
-    $destination = if ($document.StartsWith('docs\', [StringComparison]::OrdinalIgnoreCase)) { 'docs' } else { '.' }
-    $arguments += @('--add-data', "$(Join-Path $projectRoot $document);$destination")
-}
 & $pyInstaller @arguments
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE." }
 
@@ -122,6 +148,7 @@ foreach ($expected in @($exe, $bundledDll, $bundledInjector,
     (Join-Path $stageRoot 'README.md'),
     (Join-Path $stageRoot 'INTERFACE.md'),
     (Join-Path $stageRoot 'VALIDATION.md'),
+    (Join-Path $stageRoot 'THIRD_PARTY_NOTICES.md'),
     (Join-Path $stageRoot 'templates\illustrative_day_1.json'),
     (Join-Path $stageRoot 'skills\pvz-play'),
     (Join-Path $stageRoot 'docs\README.en.md'),
@@ -133,10 +160,12 @@ foreach ($expected in @($exe, $bundledDll, $bundledInjector,
     (Join-Path $stageRoot 'docs\LEVEL_CATALOG.zh-CN.md'),
     (Join-Path $stageRoot 'docs\ENTITY_LAYOUT.md'),
     (Join-Path $stageRoot 'docs\SOURCE_REFERENCES.md'),
-    (Join-Path $stageRoot 'docs\THIRD_PARTY_NOTICES.md'),
     (Join-Path $stageRoot 'licenses\Python-LICENSE.txt'),
+    (Join-Path $stageRoot 'licenses\pywin32-License.txt'),
     (Join-Path $stageRoot 'licenses\native\minhook\LICENSE.txt'),
-    (Join-Path $stageRoot 'licenses\native\nlohmann\LICENSE.MIT'))) {
+    (Join-Path $stageRoot 'licenses\native\nlohmann\LICENSE.MIT'),
+    (Join-Path $stageRoot 'native\vendor\minhook\LICENSE.txt'),
+    (Join-Path $stageRoot 'native\vendor\nlohmann\LICENSE.MIT'))) {
     if (-not (Test-Path -LiteralPath $expected)) { throw "Release output is incomplete: $expected" }
 }
 
