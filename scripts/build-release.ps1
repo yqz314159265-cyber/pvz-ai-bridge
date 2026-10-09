@@ -53,7 +53,8 @@ $requiredResources = @(
     'docs\HUMAN_OPERATIONS.en.md', 'docs\HUMAN_OPERATIONS.zh-CN.md',
     'docs\RELEASE_NOTES.md', 'docs\TEMPLATES.zh-CN.md',
     'docs\LEVEL_CATALOG.zh-CN.md', 'docs\ENTITY_LAYOUT.md',
-    'docs\SOURCE_REFERENCES.md'
+    'docs\SOURCE_REFERENCES.md', 'docs\FULL_ADVENTURE_TEST_2026-10-09.md',
+    'docs\TEST_FINDINGS_2026-10-08.md'
 )
 foreach ($resource in $requiredResources) {
     if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $resource))) {
@@ -95,7 +96,8 @@ $curatedDocuments = @(
     'docs\HUMAN_OPERATIONS.en.md', 'docs\HUMAN_OPERATIONS.zh-CN.md',
     'docs\RELEASE_NOTES.md', 'docs\TEMPLATES.zh-CN.md',
     'docs\LEVEL_CATALOG.zh-CN.md', 'docs\ENTITY_LAYOUT.md',
-    'docs\SOURCE_REFERENCES.md'
+    'docs\SOURCE_REFERENCES.md', 'docs\FULL_ADVENTURE_TEST_2026-10-09.md',
+    'docs\TEST_FINDINGS_2026-10-08.md'
 )
 foreach ($document in $curatedDocuments) {
     $source = Join-Path $projectRoot $document
@@ -107,7 +109,7 @@ foreach ($document in $curatedDocuments) {
     $nativeSourceLink = [System.Text.RegularExpressions.MatchEvaluator] {
         param($match)
         $relativeSource = $match.Groups[2].Value.Replace('\', '/')
-        return "[$($match.Groups[1].Value)](https://github.com/yqz314159265-cyber/pvz-ai-bridge/blob/v0.1.0/native/src/$relativeSource)"
+        return "[$($match.Groups[1].Value)](https://github.com/yqz314159265-cyber/pvz-ai-bridge/blob/main/native/src/$relativeSource)"
     }
     $contents = [regex]::Replace($contents, '\[([^\]]+)\]\((?:\.\./)*native/src/([^)]+)\)', $nativeSourceLink)
     [IO.File]::WriteAllText($target, $contents, [Text.UTF8Encoding]::new($false))
@@ -160,6 +162,8 @@ foreach ($expected in @($exe, $bundledDll, $bundledInjector,
     (Join-Path $stageRoot 'docs\LEVEL_CATALOG.zh-CN.md'),
     (Join-Path $stageRoot 'docs\ENTITY_LAYOUT.md'),
     (Join-Path $stageRoot 'docs\SOURCE_REFERENCES.md'),
+    (Join-Path $stageRoot 'docs\FULL_ADVENTURE_TEST_2026-10-09.md'),
+    (Join-Path $stageRoot 'docs\TEST_FINDINGS_2026-10-08.md'),
     (Join-Path $stageRoot 'licenses\Python-LICENSE.txt'),
     (Join-Path $stageRoot 'licenses\pywin32-License.txt'),
     (Join-Path $stageRoot 'licenses\native\minhook\LICENSE.txt'),
@@ -190,4 +194,4 @@ if (-not $SkipInstaller) {
 if ($LASTEXITCODE -ne 0) { throw "Release manifest generation failed with exit code $LASTEXITCODE." }
 Write-Output "Package: $stageRoot"
 Write-Output "Manifest: $(Join-Path $releaseRoot 'release-manifest.json')"
-if (-not $SkipInstaller) { Write-Output "Installer: $(Join-Path $releaseRoot 'pvz-ai-setup-0.1.0.exe')" }
+if (-not $SkipInstaller) { Write-Output "Installer: $(Join-Path $releaseRoot 'pvz-ai-setup-0.1.1.exe')" }

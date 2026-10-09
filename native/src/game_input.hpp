@@ -13,6 +13,9 @@ nlohmann::json snapshot(std::uintptr_t app, const std::string& board_scope,
 nlohmann::json action(std::uintptr_t app, const nlohmann::json& args,
                       const std::string& board_scope,
                       std::uint32_t main_thread_id);
+nlohmann::json hammer(std::uintptr_t app, const nlohmann::json& args,
+                      const std::string& board_scope,
+                      std::uint32_t main_thread_id);
 nlohmann::json tick(std::uintptr_t app, const std::string& board_scope,
                     std::uint32_t main_thread_id);
 

@@ -1,5 +1,18 @@
 # Release Notes / 发布说明
 
+## v0.1.1 source candidate / 源码候选版
+
+The 2026-10-08 stop was superseded by the resumed work on 2026-10-09. Supervised/local-rule-script evidence now confirms levels 1–30; global level 31 (4-1) was won under direct root-agent API control after scripted setup, then stopped at the award screen at profile progress 32. Level 32 was not entered. This is not an all-50-level or fully autonomous result. See [the final Adventure record](FULL_ADVENTURE_TEST_2026-10-09.md) for intervention details, exact win times, backup evidence, mistakes, and limits.
+
+This candidate includes richer internal observations, repeated-start chooser guards, deferred award continuation, the store tutorial dialogue action and corrected unlock predicate, parameter validation, and launcher language persistence. Public pure formation helpers balance rear Threepeaters across rows 2/5 and avoid redundant or misplaced Torchwoods. The private 3-10 player uses them; offline checks passed, but the corrected formation has not been replayed live. The final native Release build succeeded and the complete Python suite passed 247 tests. Active ice-cell behavior and live boss-field behavior remain unverified. Local policies are not bundled in the published installer. The published installer remains v0.1.0; no new installer or release was made.
+
+2026-10-08 的停止状态已由 2026-10-09 恢复工作后的记录取代。受监督/本地规则脚本的逐关记录现确认 1–30 关；全局第 31 关（4-1）在脚本完成开局后由根代理直接通过 API 操作并获胜，随后停在进度 32 的奖励界面，未进入 32 关。这不代表全 50 关完成或全程自主游玩。介入细节、精确胜利时间、备份证据、失误和边界见[完整冒险记录](FULL_ADVENTURE_TEST_2026-10-09.md)。
+
+本候选版本包括内部观测补充、重复开始选卡保护、奖励续接延迟、商店教学对白动作及修正后的解锁条件、参数校验和启动器语言持久化。公开纯阵型辅助函数将后排三线射手平衡布置于第 2/5 行，避免重复或错位火炬；私有玩家调用这些函数。离线检查通过，但尚未重打实测。最终原生 Release 构建成功，完整 Python 回归 247 项通过；活动冰格行为和僵王字段实战仍未验证。本地策略不随已发布安装器交付。当前已发布安装器仍为 v0.1.0；未制作新安装包或发布。
+
+See [the stopped test report / 停止记录](TEST_FINDINGS_2026-10-08.md). The published release remains v0.1.0; its historical notes follow.
+当前已发布版本仍为 v0.1.0，历史说明保留如下。
+
 ## v0.1.0 — First Preview / 首个预览版
 
 ### English

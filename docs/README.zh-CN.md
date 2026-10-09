@@ -1,10 +1,12 @@
 # PvZ AI 本地桥接器
 
-PvZ AI v0.1.0 是面向早期使用者的 Windows 本地桥接预览。它把少量经过版本与状态检查的游戏操作，提供给桌面启动器、命令行、HTTP API 和 MCP 客户端。它是**控制桥接，不是完整的自动玩家**。
+PvZ AI v0.1.1（本地未发布工作版本） 是面向早期使用者的 Windows 本地桥接预览。它把少量经过版本与状态检查的游戏操作，提供给桌面启动器、命令行、HTTP API 和 MCP 客户端。它是**控制桥接，不是完整的自动玩家**。
 
 ## 安装与支持范围
 
 使用随发行版提供的 per-user 安装程序。它不需要另外安装 Python 或 C++ 编译器；游戏本身需由 Steam 单独安装。首次启动桌面启动器时先选择简体中文或 English，之后界面以所选的一种语言显示。游戏路径会优先从 Steam 库自动发现；如需指定，可设置 `PVZ_AI_GAME` 为确切的 `PlantsVsZombies.exe` 路径。
+
+启动器将语言保存在用户数据目录的 `language.json`，与安装器的语言选择分开。若要重新选择，关闭启动器、删除这个偏好文件，再打开启动器；文件缺失或内容无效时也会重新显示选择界面。
 
 当前兼容目标是 Steam《植物大战僵尸 GOTY Edition》Windows 1.2.0.1096、x86。请在可见的 Windows 桌面会话中运行游戏。桥接调用游戏自己的处理函数和控件，不发送操作系统鼠标或键盘消息。其他版本或发行渠道未经确认。
 
@@ -40,6 +42,15 @@ AI 客户端也可通过需要 Bearer token 的 HTTP `GET /guide` 或本机 MCP 
 ## 数据、API 与备份
 
 应用状态和用户指南保存在 `%LOCALAPPDATA%\PvZ AI Bridge`。游戏自动从 Steam 库发现；`PVZ_AI_GAME` 是可选的确切游戏程序覆盖值。
+
+如果打包安装版加载桥接 DLL 时报告 `LoadLibraryW failed`，曾观察到一个案例中暂存的 DLL 带有加密属性；改用另一个数据目录后成功加载。这不能证明所有此类故障都由加密引起。若遇到该问题，可仅为本次启动设置 `PVZ_AI_DATA_DIR`，指向一个已确认可写且未加密的目录：
+
+```powershell
+$env:PVZ_AI_DATA_DIR = Join-Path $env:USERPROFILE 'Documents\PvZ-AI-Data'
+& "${env:LOCALAPPDATA}\Programs\PvZ AI Bridge\pvz-ai.exe" launcher
+```
+
+这会改变本次进程保存指南、API token 和备份的位置，但不会移动或删除原目录中的数据。启动器仍会照常显示语言选择界面。
 
 HTTP API 只监听回环地址（`127.0.0.1`）；运行中的 HTTP 主机会在 `%LOCALAPPDATA%\PvZ AI Bridge\local-api\token` 创建并保护 Bearer token，安装器本身不创建 token。只读 `GET /guide` 也需要 token，因为策略指南可能包含用户的私人批注；`GET /health` 用于实际响应检查。不要把 token 放进聊天、模型提示、截图、日志或共享配置。GET 状态/目录/指南接口只读；动作、连接、暂停和停止属于受保护的操作。
 

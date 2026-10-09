@@ -101,3 +101,13 @@ JSON 模板是有限的语义动作列表，并带状态条件、棋盘/模式�
 请查看[中文普通玩家操作矩阵](HUMAN_OPERATIONS.zh-CN.md)，区分已实现、已实测和未验证项目。目前仅实测部分冒险、泳池无尽、菜单、档案、图鉴、选项、商店、花园和 Zombatar 操作；特殊模式和许多小游戏交互仍不完整或未验证。没有覆盖所有模式的自动获胜声明。
 
 实验前先备份存档。备份会复制文件并生成 SHA-256 清单，但不提供自动恢复。完成后停止待处理任务并分离桥接；DLL 会一直加载到游戏进程退出。替换或删除桥接文件前请正常退出游戏。
+
+## Direct supervision and source helpers / 直接监督与源码辅助函数
+
+During direct model control, stop any competing player first. Pause while reasoning, resume for ordinary actions and animations, then read a fresh state. A successful `collect` request starts normal collection; it does not immediately increase spendable sun. Check the updated sun balance and packet cooldown before planting. Do not repeat collection on an already-collecting entity. An award screen and increased profile progress confirm a win; a plant request's acknowledgment does not.
+
+源码方式直接接管时，先停止其他玩家。思考时暂停，执行普通动作与动画时恢复，然后读取新状态。`collect` 成功只是开始普通收集，不会立即增加可花费阳光；种植前核对更新后的阳光和卡片冷却，不重复收取正在收集的实体。奖励界面与档案进度共同确认通关，种植请求接受并不证明获胜。
+
+For source developers, [`pvz_ai.formation`](https://github.com/yqz314159265-cyber/pvz-ai-bridge/blob/main/src/pvz_ai/formation.py) offers pure `threepeater_candidates` and `torchwood_candidates` cell planners for level 3-10. They issue no API calls and are not an installed autonomous player. Supply current occupied/blocked cells, then independently verify terrain, Lily Pads, ice, enemies, cooldown and the native capabilities before choosing a move. Offline tests cover formation properties; the corrected 3-10 formation has not been replayed live.
+
+源码开发者可使用 [`pvz_ai.formation`](https://github.com/yqz314159265-cyber/pvz-ai-bridge/blob/main/src/pvz_ai/formation.py) 的两个纯格位规划函数，辅助 3-10 三线射手与火炬布局。它们不调用 API，也不是安装版自动玩家。传入最新占用/阻挡格后，仍须自行检查地形、睡莲、冰道、敌人、冷却与原生能力，再决定动作。离线测试检查阵型性质，修正后的 3-10 尚未重打实测。人工打法模板仍由用户填写。

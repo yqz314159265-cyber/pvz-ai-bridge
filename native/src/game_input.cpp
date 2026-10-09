@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -54,6 +55,9 @@ constexpr std::size_t kWidgetManagerOwner = 0x20;
 constexpr std::size_t kWidgetParent = 0x24;
 constexpr std::size_t kBoardCursor = 0x150;
 constexpr std::size_t kCursorType = 0x30;
+constexpr std::size_t kBoardZombies = 0x0a8;
+constexpr std::size_t kZombieStride = 0x168;
+constexpr std::uint32_t kMaxZombieSlots = 4096;
 constexpr int kSceneLevelIntro = 2;
 constexpr int kScenePlaying = 3;
 constexpr int kModeZenGarden = 43;
@@ -63,6 +67,14 @@ constexpr int kMaxScreenY = 600;
 constexpr unsigned kMaxParentDepth = 32;
 
 enum class ButtonKind { left, right };
+enum class JobKind { pointer_click, hammer_zombie };
+
+struct PixelRect {
+    std::int32_t x;
+    std::int32_t y;
+    std::int32_t width;
+    std::int32_t height;
+};
 
 struct Context {
     std::uintptr_t manager = 0;
@@ -74,6 +86,7 @@ struct Context {
 
 struct PendingJob {
     std::string id;
+    JobKind kind = JobKind::pointer_click;
     std::string scope;
     std::string surface;
     int x = 0;
@@ -84,6 +97,17 @@ struct PendingJob {
     std::uintptr_t board = 0;
     std::uintptr_t root = 0;
     std::uintptr_t manager = 0;
+    std::uint32_t target_entity_id = 0;
+};
+
+struct ZombieTarget {
+    std::uintptr_t address = 0;
+    std::int32_t phase = -1;
+    std::int32_t hp = 0;
+    std::int32_t helmet_hp = 0;
+    std::int32_t helmet_type = 0;
+    PixelRect body{};
+    PixelRect hammer{};
 };
 
 std::mutex g_mutex;
@@ -160,8 +184,10 @@ Context validate_context(std::uintptr_t app, const std::string& scope,
     if (context.scene != kSceneLevelIntro && context.scene != kScenePlaying)
         throw std::runtime_error("Generic board input requires scene 2 or 3.");
     if (surface == "board") {
-        if (context.scene != kScenePlaying)
-            throw std::runtime_error("The board surface is available only in scene 3.");
+        // Fresh Adventure tutorials (notably Dave's 1-5 shovel lesson)
+        // receive normal Board clicks during scene 2, before play begins.
+        // Keep the same board-generation, modal, ownership and live hit-test
+        // guards: a visible chooser cannot be clicked through as the Board.
         if (read<std::uint8_t>(add(context.board, 0x17c), "Board paused"))
             throw std::runtime_error("Resume the game before sending board input.");
         context.root = context.board;
@@ -249,7 +275,13 @@ void revalidate_queued_context(std::uintptr_t app, const PendingJob& job,
         throw std::runtime_error("The active Board, surface, or WidgetManager changed before input.");
 }
 
-void perform_click(std::uintptr_t app, const PendingJob& job, const std::string& scope) {
+Context validate_hammer_context(std::uintptr_t app, const std::string& scope);
+ZombieTarget resolve_hammer_target(std::uintptr_t board, std::uint32_t entity_id);
+bool zombie_after(std::uintptr_t board, std::uint32_t entity_id,
+                  std::int32_t& hp, std::int32_t& helmet_hp, bool& present) noexcept;
+
+void perform_click(std::uintptr_t app, const PendingJob& job, const std::string& scope,
+                   const std::function<void()>& before_down = {}) {
     revalidate_queued_context(app, job, scope);
     const auto context = validate_context(app, scope, job.surface);
     const auto held = read<std::uint32_t>(add(context.manager, kWidgetManagerDownButtons), "held mouse buttons");
@@ -268,6 +300,8 @@ void perform_click(std::uintptr_t app, const PendingJob& job, const std::string&
     if (!hover || !target_belongs_to_surface(hover, context.root, context.manager))
         throw std::runtime_error("Normal hit testing did not select the requested Board/Chooser surface.");
 
+    if (before_down) before_down();
+
     const int button = button_argument(job.button);
     ReleaseOnExit release{context.manager, job.x, job.y, button, true};
     mouse_down(context.manager, job.x, job.y, button);
@@ -283,6 +317,57 @@ void perform_click(std::uintptr_t app, const PendingJob& job, const std::string&
     release.armed = false;
     if (read<std::uint32_t>(add(context.manager, kWidgetManagerDownButtons), "released button state") != 0)
         throw std::runtime_error("WidgetManager did not release the requested mouse button.");
+}
+
+json perform_hammer(std::uintptr_t app, const PendingJob& job, const std::string& scope) {
+    revalidate_queued_context(app, job, scope);
+    const auto context = validate_hammer_context(app, scope);
+    if (context.board != job.board || context.root != job.root || context.manager != job.manager)
+        throw std::runtime_error("The active Board, surface, or WidgetManager changed before hammer input.");
+    const auto before = resolve_hammer_target(context.board, job.target_entity_id);
+    const auto x64 = static_cast<std::int64_t>(before.hammer.x) + before.hammer.width / 2;
+    const auto y64 = static_cast<std::int64_t>(before.hammer.y) + before.hammer.height / 2 + 20;
+    if (x64 < 0 || x64 >= kMaxScreenX || y64 < 0 || y64 >= kMaxScreenY)
+        throw std::runtime_error("The current hammer hit point is outside the game surface.");
+    const int x = static_cast<int>(x64);
+    const int y = static_cast<int>(y64);
+
+    PendingJob click = job;
+    click.kind = JobKind::pointer_click;
+    click.surface = "board";
+    click.button = ButtonKind::left;
+    click.x = x;
+    click.y = y;
+    const auto verify_before_down = [&]() {
+        const auto fresh_context = validate_hammer_context(app, scope);
+        if (fresh_context.board != job.board || fresh_context.root != job.root ||
+            fresh_context.manager != job.manager)
+            throw std::runtime_error("The active Board or WidgetManager changed before hammer MouseDown.");
+        const auto fresh = resolve_hammer_target(fresh_context.board, job.target_entity_id);
+        const auto fresh_x = static_cast<std::int64_t>(fresh.hammer.x) + fresh.hammer.width / 2;
+        const auto fresh_y = static_cast<std::int64_t>(fresh.hammer.y) + fresh.hammer.height / 2 + 20;
+        if (fresh_x != x || fresh_y != y || fresh.hp != before.hp ||
+            fresh.helmet_hp != before.helmet_hp || fresh.helmet_type != before.helmet_type)
+            throw std::runtime_error("The zombie changed while hammer input was queued.");
+    };
+    perform_click(app, click, scope, verify_before_down);
+
+    std::int32_t hp_after = 0, helmet_hp_after = 0;
+    bool present_after = false;
+    const bool after_available = zombie_after(context.board, job.target_entity_id,
+        hp_after, helmet_hp_after, present_after);
+    const bool effect_observed = after_available &&
+        (!present_after || hp_after < before.hp || helmet_hp_after < before.helmet_hp);
+    return {{"ok", true}, {"status", "dispatched"},
+        {"detail", "Normal WidgetManager left-click dispatched at the verified hammer geometry."},
+        {"target_entity_id", job.target_entity_id}, {"candidate_point", {{"x", x}, {"y", y}}},
+        {"hp_before", before.hp}, {"helmet_hp_before", before.helmet_hp},
+        {"helmet_type_before", before.helmet_type},
+        {"after_check_available", after_available},
+        {"target_present_after", after_available ? json(present_after) : json(nullptr)},
+        {"hp_after", after_available ? json(hp_after) : json(nullptr)},
+        {"helmet_hp_after", after_available ? json(helmet_hp_after) : json(nullptr)},
+        {"effect_observed", effect_observed}};
 }
 
 json fail(const std::string& detail) {
@@ -301,6 +386,106 @@ int current_cursor_type(std::uintptr_t board) {
     const auto type = read<std::int32_t>(add(cursor, kCursorType), "cursor type");
     if (type < 0 || type > 17) throw std::runtime_error("Cursor type is outside the verified enum range.");
     return type;
+}
+
+Context validate_hammer_context(std::uintptr_t app, const std::string& scope) {
+    const auto context = validate_context(app, scope, "board");
+    if (context.scene != kScenePlaying ||
+        !((context.mode == 0 && read<std::int32_t>(add(context.board, 0x5568), "Board adventure level") == 15) ||
+          context.mode == 30))
+        throw std::runtime_error("Hammer input is available only in Adventure level 2-5 or Whack-a-Zombie.");
+    if (current_cursor_type(context.board) != 7)
+        throw std::runtime_error("Select the hammer tool before targeting a zombie.");
+    return context;
+}
+
+__declspec(noinline) void zombie_body_rect(std::uintptr_t zombie, PixelRect* output) {
+    __asm {
+        push ebx
+        push edi
+        mov ebx, zombie
+        mov edi, output
+        mov eax, 0546B80h
+        call eax
+        pop edi
+        pop ebx
+    }
+}
+
+bool bounded_rect(const PixelRect& rect) {
+    constexpr std::int32_t kCoordinateLimit = 8192;
+    constexpr std::int32_t kDimensionLimit = 4096;
+    return rect.x >= -kCoordinateLimit && rect.x <= kCoordinateLimit &&
+        rect.y >= -kCoordinateLimit && rect.y <= kCoordinateLimit &&
+        rect.width > 0 && rect.width <= kDimensionLimit &&
+        rect.height > 0 && rect.height <= kDimensionLimit;
+}
+
+ZombieTarget resolve_hammer_target(std::uintptr_t board, std::uint32_t entity_id) {
+    if ((entity_id & 0xFFFF0000u) == 0)
+        throw std::runtime_error("The requested zombie ID has no live generation.");
+    const auto header = add(board, kBoardZombies);
+    const auto block = read<std::uint32_t>(header, "Board zombie-array block");
+    const auto count = read<std::uint32_t>(header + 4, "Board zombie-array count");
+    const auto capacity = read<std::uint32_t>(header + 8, "Board zombie-array capacity");
+    if (count > capacity || capacity > kMaxZombieSlots || count > kMaxZombieSlots)
+        throw std::runtime_error("Zombie DataArray bounds are invalid.");
+    const auto slot = entity_id & 0xFFFFu;
+    if (!block || slot >= count || !readable(block, static_cast<std::size_t>(count) * kZombieStride))
+        throw std::runtime_error("The requested zombie ID is stale or no longer present.");
+    const auto address = add(block, static_cast<std::size_t>(slot) * kZombieStride);
+    if (!readable(address, kZombieStride) ||
+        read<std::uint32_t>(add(address, 0x164), "Zombie full ID") != entity_id ||
+        read<std::uint8_t>(add(address, 0xEC), "Zombie dead flag") != 0)
+        throw std::runtime_error("The requested zombie ID is stale or no longer present.");
+
+    ZombieTarget target{};
+    target.address = address;
+    target.phase = read<std::int32_t>(add(address, 0x28), "Zombie phase");
+    target.hp = read<std::int32_t>(add(address, 0xC8), "Zombie health");
+    target.helmet_hp = read<std::int32_t>(add(address, 0xD0), "Zombie helmet health");
+    target.helmet_type = read<std::int32_t>(add(address, 0xC4), "Zombie helmet type");
+    // The target's normal hammer candidate loop at 0x42570C skips these
+    // phases and dead zombies before invoking its body-rectangle helper.
+    if (target.phase == 1 || target.phase == 2 || target.phase == 3 || target.hp <= 0)
+        throw std::runtime_error("The requested zombie is not in a live hammer-targetable phase.");
+    zombie_body_rect(address, &target.body);
+    if (!bounded_rect(target.body))
+        throw std::runtime_error("The target returned an invalid zombie body rectangle.");
+    target.hammer = target.body;
+    target.hammer.height -= 50;
+    if (!bounded_rect(target.hammer))
+        throw std::runtime_error("The target has no valid hammer overlap rectangle.");
+    return target;
+}
+
+bool zombie_after(std::uintptr_t board, std::uint32_t entity_id,
+                  std::int32_t& hp, std::int32_t& helmet_hp, bool& present) noexcept {
+    try {
+        const auto header = add(board, kBoardZombies);
+        const auto block = read<std::uint32_t>(header, "Board zombie-array block after hammer");
+        const auto count = read<std::uint32_t>(header + 4, "Board zombie-array count after hammer");
+        const auto capacity = read<std::uint32_t>(header + 8, "Board zombie-array capacity after hammer");
+        if (count > capacity || capacity > kMaxZombieSlots || count > kMaxZombieSlots) return false;
+        const auto slot = entity_id & 0xFFFFu;
+        if (slot >= count) {
+            present = false;
+            return true;
+        }
+        if (!block || !readable(block, static_cast<std::size_t>(count) * kZombieStride)) return false;
+        const auto address = add(block, static_cast<std::size_t>(slot) * kZombieStride);
+        if (!readable(address, kZombieStride)) return false;
+        if (read<std::uint32_t>(add(address, 0x164), "Zombie full ID after hammer") != entity_id) {
+            present = false;
+            return true;
+        }
+        present = read<std::uint8_t>(add(address, 0xEC), "Zombie dead flag after hammer") == 0;
+        hp = read<std::int32_t>(add(address, 0xC8), "Zombie health after hammer");
+        helmet_hp = read<std::int32_t>(add(address, 0xD0), "Zombie helmet health after hammer");
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace
@@ -406,6 +591,52 @@ json action(std::uintptr_t app, const json& args, const std::string& board_scope
     }
 }
 
+json hammer(std::uintptr_t app, const json& args, const std::string& board_scope,
+            std::uint32_t main_thread_id) {
+    try {
+        require_main_thread(main_thread_id);
+        if (!args.is_object() || args.size() != 1 || !args.contains("entity_id") ||
+            !args["entity_id"].is_number_integer() || args["entity_id"].is_boolean())
+            throw std::runtime_error("Hammer action requires only an integer entity_id.");
+        const auto signed_id = args["entity_id"].get<std::int64_t>();
+        if (signed_id <= 0 || static_cast<std::uint64_t>(signed_id) > 0xFFFFFFFFull)
+            throw std::runtime_error("The requested zombie ID is outside the verified range.");
+        const auto entity_id = static_cast<std::uint32_t>(signed_id);
+        if (board_scope.empty() || board_scope.size() > 128)
+            throw std::runtime_error("A current board-generation scope is required.");
+        const auto context = validate_hammer_context(app, board_scope);
+        (void)resolve_hammer_target(context.board, entity_id);
+        const auto held = read<std::uint32_t>(add(context.manager, kWidgetManagerDownButtons), "held mouse buttons");
+        if (held != 0) throw std::runtime_error("Refusing to queue while a mouse button is held.");
+
+        PendingJob job{};
+        job.id = "hammer-" + std::to_string(g_next_job_id.fetch_add(1, std::memory_order_relaxed));
+        job.kind = JobKind::hammer_zombie;
+        job.scope = board_scope;
+        job.surface = "board";
+        job.button = ButtonKind::left;
+        job.initial_pointer_x = read<std::int32_t>(add(context.manager, kWidgetManagerMouseX), "current mouse x");
+        job.initial_pointer_y = read<std::int32_t>(add(context.manager, kWidgetManagerMouseY), "current mouse y");
+        job.board = context.board;
+        job.root = context.root;
+        job.manager = context.manager;
+        job.target_entity_id = entity_id;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (g_pending || g_running) throw std::runtime_error("A game-input job is already pending or running.");
+            g_pending = job;
+            g_last_result = {{"job_id", job.id}, {"status", "pending"},
+                {"action", "hammer_zombie"}, {"target_entity_id", entity_id}};
+        }
+        return {{"ok", true}, {"accepted", true}, {"transition_pending", true},
+            {"job_id", job.id}, {"target_entity_id", entity_id}};
+    } catch (const std::exception& error) {
+        return fail(error.what());
+    } catch (...) {
+        return fail("Unknown hammer queue failure.");
+    }
+}
+
 json tick(std::uintptr_t app, const std::string& board_scope,
           std::uint32_t main_thread_id) {
     PendingJob job{};
@@ -420,13 +651,18 @@ json tick(std::uintptr_t app, const std::string& board_scope,
     json result{{"ok", false}, {"job_id", job.id}};
     try {
         require_main_thread(main_thread_id);
-        result["cursor_before"] = current_cursor_type(job.board);
-        perform_click(app, job, board_scope);
-        result["ok"] = true;
-        result["status"] = "dispatched";
-        result["detail"] = "Normal WidgetManager MouseDown/MouseUp was dispatched.";
-        if (read<std::uint32_t>(add(app,kBoardOffset), "Board after input") == job.board)
-            result["cursor_after"] = current_cursor_type(job.board);
+        if (job.kind == JobKind::hammer_zombie) {
+            result = perform_hammer(app, job, board_scope);
+            result["job_id"] = job.id;
+        } else {
+            result["cursor_before"] = current_cursor_type(job.board);
+            perform_click(app, job, board_scope);
+            result["ok"] = true;
+            result["status"] = "dispatched";
+            result["detail"] = "Normal WidgetManager MouseDown/MouseUp was dispatched.";
+            if (read<std::uint32_t>(add(app,kBoardOffset), "Board after input") == job.board)
+                result["cursor_after"] = current_cursor_type(job.board);
+        }
     } catch (const std::exception& error) {
         result["status"] = "failed";
         result["detail"] = error.what();
@@ -434,10 +670,12 @@ json tick(std::uintptr_t app, const std::string& board_scope,
         result["status"] = "failed";
         result["detail"] = "Unknown game-input dispatch failure.";
     }
-    result["surface"] = job.surface;
-    result["button"] = job.button == ButtonKind::left ? "left" : "right";
-    result["x"] = job.x;
-    result["y"] = job.y;
+    if (job.kind == JobKind::pointer_click) {
+        result["surface"] = job.surface;
+        result["button"] = job.button == ButtonKind::left ? "left" : "right";
+        result["x"] = job.x;
+        result["y"] = job.y;
+    }
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_last_result = result;

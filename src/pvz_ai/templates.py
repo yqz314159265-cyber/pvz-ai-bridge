@@ -15,6 +15,8 @@ ACTION_TYPES |= {"profile_open", "profile_close", "profile_select", "profile_cre
 ACTION_TYPES |= {"navigate", "ui", "almanac_page", "almanac_entry"}
 ACTION_TYPES.add("click_to_start")
 ACTION_TYPES.add("game_input")
+ACTION_TYPES.add("hammer_zombie")
+ACTION_TYPES.add("shop_advance_dialogue")
 ACTION_TYPES |= {"achievements_back", "achievements_scroll"}
 ACTION_TYPES |= {"quit_open", "quit_cancel", "quit_confirm", "credits_skip"}
 ACTION_TYPES |= {"profile_delete_confirm", "open_credits"}
@@ -75,6 +77,7 @@ def _validate_action(action: Any) -> dict:
         "enter_garden": {"garden_id"}, "garden_care": {"plant_id", "tool"},
         "garden_move": {"plant_id", "row", "col"}, "open_shop": set(), "shop_page": {"page"},
         "shop_buy": {"item_id", "quantity", "max_total_cost"}, "close_shop": set(),
+        "shop_advance_dialogue": set(),
         "open_menu": set(), "close_menu": set(),
         "open_almanac": set(), "close_almanac": set(), "option_set": {"name", "value"},
         "profile_open": set(), "profile_close": {"dialog_id"},
@@ -83,6 +86,7 @@ def _validate_action(action: Any) -> dict:
         "navigate": {"route"}, "almanac_page": {"page"}, "almanac_entry": {"kind", "index"},
         "click_to_start": set(),
         "game_input": {"board_id", "surface", "x", "y", "button"},
+        "hammer_zombie": {"board_id", "entity_id"},
         "achievements_back": set(), "achievements_scroll": {"direction", "ticks"},
         "quit_open": set(), "quit_cancel": set(), "quit_confirm": {"confirm"}, "credits_skip": set(),
         "open_credits": set(), "profile_delete_confirm": {"job_id", "confirm"},
@@ -105,6 +109,10 @@ def _validate_action(action: Any) -> dict:
         if not isinstance(action["button"], str) or action["button"] not in {"left", "right"}:
             raise TemplateError("Unknown game-input button.")
         _integer(action["x"], "x", 0, 799); _integer(action["y"], "y", 0, 599)
+    elif kind == "hammer_zombie":
+        if not isinstance(action["board_id"], str) or not 1 <= len(action["board_id"]) <= 128:
+            raise TemplateError("hammer_zombie requires the current board_id.")
+        _integer(action["entity_id"], "entity_id", 1, 2**32 - 1)
     elif kind == "achievements_scroll":
         if not isinstance(action["direction"], str) or action["direction"] not in {"up", "down"}:
             raise TemplateError("Unknown achievements scroll direction.")

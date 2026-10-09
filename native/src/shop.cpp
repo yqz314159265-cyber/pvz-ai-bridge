@@ -326,6 +326,9 @@ json snapshot(std::uintptr_t application) {
 
     result["open"] = true;
     result["ready"] = store_ready(store);
+    // Exact GOTY MouseDown at 49BE60 tests this flag before any item hit test.
+    result["can_advance_dialogue"] =
+        read_value<std::uint8_t>(store + 0x1a4, "click-to-continue speech flag") != 0;
     const int page = read_value<std::int32_t>(store + 0x1b0, "page");
     if (page < 0 || page > 3) throw std::runtime_error("Unexpected store page value.");
     result["page"] = page;
@@ -343,6 +346,22 @@ json snapshot(std::uintptr_t application) {
 json dispatch(std::uintptr_t application, const std::string& type, const json& args) {
     if (!valid_app(application)) throw std::runtime_error("Shop action refused for an unexpected game app.");
     if (purchase_pending) throw std::runtime_error("A shop purchase is already awaiting its verified game confirmation.");
+    if (type == "shop_advance_dialogue") {
+        if (!args.empty()) throw std::runtime_error("shop_advance_dialogue takes no arguments.");
+        const auto store = get_store(application);
+        if (!store || app_dialog_count(application) != 1)
+            throw std::runtime_error("A sole active store dialog is required.");
+        if (!read_value<std::uint8_t>(store + 0x1a4, "click-to-continue speech flag"))
+            throw std::runtime_error("The store is not showing click-to-continue dialogue.");
+        const auto before = read_value<std::int32_t>(application + 0x970, "Dave message index");
+        // The verified flag branch ignores coordinates and advances speech;
+        // it returns before all shop item/purchase hit tests.
+        store_mouse_down(store, 0, 0);
+        const auto after = read_value<std::int32_t>(application + 0x970, "Dave message index");
+        const bool waiting = read_value<std::uint8_t>(store + 0x1a4, "click-to-continue speech flag") != 0;
+        return {{"accepted", before != after || !waiting}, {"message_before", before},
+                {"message_after", after}, {"dialogue_pending", waiting}};
+    }
     if (type == "open_shop") {
         if (!args.empty()) throw std::runtime_error("open_shop takes no arguments.");
         if (get_store(application)) return {{"accepted", true}, {"open", true}, {"already_open", true}};

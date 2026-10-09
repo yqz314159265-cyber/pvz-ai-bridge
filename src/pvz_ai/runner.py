@@ -15,7 +15,8 @@ from .local_model import LocalModelClient, validate_action_proposal
 
 MENU_SCENES = {"menu", "chooser", "seedchooser", "choose_cards", "level_select", "main_menu"}
 MENU_ACTIONS = {"enter_level", "choose_cards", "start_level", "continue", "restart",
-                "back_to_menu", "enter_garden", "open_shop", "shop_page", "shop_buy", "close_shop"}
+                "back_to_menu", "enter_garden", "open_shop", "shop_page", "shop_buy", "close_shop",
+                "shop_advance_dialogue"}
 PAUSE_CAPABILITIES = {"pause", "op.pause", "operation.pause"}
 SUNFLOWER_TYPE = 1
 PEASHOOTER_TYPE = 0

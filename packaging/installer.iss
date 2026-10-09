@@ -1,4 +1,4 @@
-#define ProductVersion "0.1.0"
+#define ProductVersion "0.1.1"
 #define ProductExe "pvz-ai.exe"
 #define StageDir "..\build\release\dist\pvz-ai"
 #define ReleaseDir "..\build\release"

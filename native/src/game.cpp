@@ -42,8 +42,19 @@ std::atomic<bool> framework_resume_pending{false};
 uintptr_t paused_board=0, last_board=0;
 uint64_t board_generation=0;
 int last_tick=-1;
+std::string started_chooser_scope;
 using UpdateFn=bool(__thiscall*)(void*,bool*);
 UpdateFn original_update=nullptr;
+
+enum class AwardContinueState { idle, pending, running, complete, failed };
+struct DeferredAwardContinue {
+    uintptr_t app=0;
+    uintptr_t award=0;
+    ULONGLONG ready_at=0;
+    AwardContinueState state=AwardContinueState::idle;
+    std::string error;
+};
+DeferredAwardContinue deferred_award_continue;
 
 void set_background_running(bool active) {
     auto address=reinterpret_cast<unsigned char*>(0x5d87c9);
@@ -75,6 +86,37 @@ uintptr_t board(){return read<uint32_t>(app()+0x868);}
 int scene(){return read<int>(app()+0x91c);}
 int mode(){return read<int>(app()+0x918);}
 std::string hex(uintptr_t value){std::ostringstream out;out<<std::hex<<value;return out.str();}
+
+json dave_dialogue(uintptr_t a) {
+    // Exact 1096 references: 459550 reads the message index; 459A85
+    // initializes Dave state; 459C70 / 45A767 assign index / current text.
+    json out={{"available",false},{"text",nullptr}};
+    try {
+        const int state=read<int>(a+0x964), index=read<int>(a+0x970);
+        if(state<0||state>6)throw std::runtime_error("Unexpected Dave state.");
+        static const char* names[]={"off","entering","leaving","idling","talking","handing_talking","handing_idling"};
+        out.update({{"state",state},{"state_name",names[state]},{"active",state!=0},{"message_index",index}});
+        const auto object=a+0x974;
+        const auto size=read<uint32_t>(object+0x14), capacity=read<uint32_t>(object+0x18);
+        if(size>4096||capacity<size||capacity>1024*1024)throw std::runtime_error("Dave text exceeds observed bounds.");
+        const uintptr_t data=capacity<16?object+4:read<uint32_t>(object+4);
+        if(!readable(data,size+1)||read<char>(data+size)!='\0')throw std::runtime_error("Invalid Dave text storage.");
+        std::string raw(reinterpret_cast<const char*>(data),size);
+        if(state!=read<int>(a+0x964)||index!=read<int>(a+0x970)||size!=read<uint32_t>(object+0x14)||capacity!=read<uint32_t>(object+0x18)||
+            (capacity>=16&&data!=read<uint32_t>(object+4)))throw std::runtime_error("Dave text changed during observation.");
+        // This supported executable uses the English game resources (CP1252).
+        if(!raw.empty()) {
+            const int count=MultiByteToWideChar(1252,0,raw.data(),static_cast<int>(raw.size()),nullptr,0);
+            if(!count)throw std::runtime_error("Cannot decode Dave text.");
+            std::wstring wide(count,L'\0');MultiByteToWideChar(1252,0,raw.data(),static_cast<int>(raw.size()),wide.data(),count);
+            const int bytes=WideCharToMultiByte(CP_UTF8,0,wide.data(),count,nullptr,0,nullptr,nullptr);
+            std::string utf8(bytes,'\0');WideCharToMultiByte(CP_UTF8,0,wide.data(),count,utf8.data(),bytes,nullptr,nullptr);
+            raw=std::move(utf8);
+        }
+        out["available"]=true;out["text"]=(state==0||index<0)?json(nullptr):json(raw);
+    } catch(const std::exception& e) {out["error"]=e.what();}
+    return out;
+}
 
 std::string ui_scope() {
     static std::string previous;
@@ -114,6 +156,42 @@ std::string sha256(const void* data,size_t size) {
 // 1096 vtable +0x17c targets 0x5dd270, returns AL, and pops one bool* arg.
 // Servicing only outer UpdateApp would strand synchronous purchase dialogs.
 std::string board_id(uintptr_t b);
+__declspec(noinline) void continue_award(uintptr_t award);
+void tick_award_continue(uintptr_t application) {
+    auto& job=deferred_award_continue;
+    if(job.state==AwardContinueState::idle)return;
+    if(job.state==AwardContinueState::complete||job.state==AwardContinueState::failed) {
+        try {
+            if(job.app&&read<int>(job.app+0x91c)!=5)job=DeferredAwardContinue{};
+        } catch(...) {
+            job.state=AwardContinueState::failed;
+            job.error="Could not verify the Award screen while retiring its deferred continuation.";
+        }
+        return;
+    }
+    if(job.state!=AwardContinueState::pending||GetTickCount64()<job.ready_at)return;
+
+    // Publish the running state and clear the queued work before entering the
+    // game's callback: its modal wait re-enters UpdateAppStep and must service
+    // bridge requests (for example, the ordinary Almanac Close button).
+    job.state=AwardContinueState::running;
+    try {
+        if(application!=job.app||app()!=job.app||scene()!=5||
+            read<uint32_t>(application+0x878)!=job.award||!readable(job.award,0x30))
+            throw std::runtime_error("Award screen changed before its deferred Continue callback.");
+        if(pvz::menu::snapshot(application).value("dialog_count",0)!=0)
+            throw std::runtime_error("An existing dialog opened before the deferred Award Continue callback.");
+        continue_award(job.award);
+        job.state=AwardContinueState::complete;
+        job.error.clear();
+    } catch(const std::exception& error) {
+        job.state=AwardContinueState::failed;
+        job.error=error.what();
+    } catch(...) {
+        job.state=AwardContinueState::failed;
+        job.error="Unknown error while invoking the deferred Award Continue callback.";
+    }
+}
 bool __fastcall update_hook(void* self,void*,bool* updated) {
     if(enabled.load() && reinterpret_cast<uintptr_t>(self)==app()) {
         main_thread.store(GetCurrentThreadId());
@@ -136,6 +214,7 @@ bool __fastcall update_hook(void* self,void*,bool* updated) {
         pvz::lifecycle_controls::tick(reinterpret_cast<uintptr_t>(self));
         pvz::game_input::tick(reinterpret_cast<uintptr_t>(self),board_id(board()),main_thread.load());
         bridge::process_pending();
+        tick_award_continue(reinterpret_cast<uintptr_t>(self));
     }
     return original_update(self,updated);
 }
@@ -148,6 +227,20 @@ std::string board_id(uintptr_t b) {
 }
 int current_seed_cost(uintptr_t b,int plant_type,int imitater_type);
 bool conveyor_belt(uintptr_t b);
+bool seed_available(uintptr_t app,int type);
+bool chooser_widget_visible(int current_scene,uintptr_t chooser) {
+    return current_scene==2&&chooser&&readable(chooser,0xd44)&&
+        read<uint8_t>(chooser+0x65)==1;
+}
+bool chooser_excluded_tutorial(uintptr_t b) {
+    if(!b||mode()!=0)return false;
+    const int level=read<int>(b+0x5568);
+    return level==5||level==10||level==15||level==20;
+}
+bool chooser_can_select(uintptr_t b,int current_scene,uintptr_t chooser,bool no_dialogs) {
+    return b&&readable(b,0x556c)&&no_dialogs&&chooser_widget_visible(current_scene,chooser)&&
+        !chooser_excluded_tutorial(b);
+}
 json capabilities() {
     json c=json::array({"state","levels","pause","resume"});
     int s=scene();
@@ -192,21 +285,36 @@ json capabilities() {
     if(s==7&&dialogs.value("dialog_count",0)==0)c.push_back("action.back_to_menu");
     if(dialogs.value("dialog_count",0)==1&&pvz::shop::snapshot(app()).value("open",false)) {
         c.push_back("action.shop_buy");c.push_back("action.close_shop");c.push_back("action.shop_page");
+        if(pvz::shop::snapshot(app()).value("can_advance_dialogue",false))c.push_back("action.shop_advance_dialogue");
     }
     if(s==3&&mode()==43&&pvz::garden::snapshot(app()).value("sale_confirmation_pending",false)) {
         c.push_back("action.garden_sale_confirm");c.push_back("action.garden_sale_cancel");
     }
     if(dialogs.value("dialog_count",0)>0)return c;
     if((s==2||s==3)&&board()&&mode()!=43&&mode()!=50)c.push_back("action.game_input");
+    if(s==3&&board()&&(mode()==30||(mode()==0&&read<int>(board()+0x5568)==15))&&
+       !read<uint8_t>(board()+0x17c)) {
+        const auto cursor=read<uint32_t>(board()+0x150);
+        if(cursor&&read<int>(cursor+0x30)==7)c.push_back("action.hammer_zombie");
+    }
     if(s==1||s==7)c.push_back("action.enter_level");
     if(s==3&&mode()==43&&board()) {
         for(const char* name:{"enter_garden","garden_care","garden_move","garden_chocolate","garden_feed_snail","garden_wake_snail","garden_cursor_cancel","garden_wheelbarrow_pick","garden_wheelbarrow_place","garden_next","garden_sell"})c.push_back(std::string("action.")+name);
     }
     if(s==3&&mode()==50&&board()) {c.push_back("action.tree_feed");c.push_back("action.garden_next");c.push_back("action.enter_garden");c.push_back("action.garden_cursor_cancel");}
     uintptr_t profile=read<uint32_t>(app()+0x94c);
-    if(profile&&read<int>(profile+0x58)>0&&(s==1||(s==3&&mode()==43)))c.push_back("action.open_shop");
-    if(s==2 && read<uint32_t>(app()+0x874)) {
-        c.push_back("action.choose_cards");c.push_back("action.start_level");
+    // Exact 1096 CanShowStore at 4598B0: completed, seen upsell, or level >=25.
+    const bool shop_unlocked = profile && (read<int>(profile+0x58)>0 ||
+        read<uint8_t>(profile+0x374)!=0 || read<int>(profile+0x50)>=25);
+    if(shop_unlocked&&(s==1||(s==3&&mode()==43)))c.push_back("action.open_shop");
+    const uintptr_t chooser=read<uint32_t>(app()+0x874), current_board=board();
+    const std::string chooser_scope=current_board&&chooser&&readable(chooser,0xd44)
+        ? board_id(current_board)+":"+hex(chooser):std::string{};
+    const bool started_transition=s==2&&!chooser_scope.empty()&&started_chooser_scope==chooser_scope;
+    if(started_transition)c.push_back("action.start_level");
+    if(chooser_can_select(current_board,s,chooser,dialogs.value("dialog_count",0)==0)) {
+        c.push_back("action.choose_cards");
+        if(!started_transition)c.push_back("action.start_level");
     }
     if(s==5)c.push_back("action.continue");
     if(s==3 && board()) {
@@ -231,11 +339,22 @@ json snapshot() {
         {"result",ui==4?"lost":ui==5?"award":"in_progress"},
         {"observation_complete",false}};
     result["background_running"]=background_patch.load();
+    const char* award_continue_state="idle";
+    switch(deferred_award_continue.state) {
+        case AwardContinueState::pending: award_continue_state="pending"; break;
+        case AwardContinueState::running: award_continue_state="running"; break;
+        case AwardContinueState::complete: award_continue_state="complete"; break;
+        case AwardContinueState::failed: award_continue_state="failed"; break;
+        default: break;
+    }
+    result["award_continue"]={{"state",award_continue_state},
+        {"error",deferred_award_continue.error.empty()?json(nullptr):json(deferred_award_continue.error)}};
     result["window_has_focus"]=bool(read<uint8_t>(a+0x542));
     result["dialogs"]=pvz::menu::snapshot(a);
     result["options"]=pvz::options_controls::snapshot(a);
     result["lifecycle"]=pvz::lifecycle_controls::snapshot(a);
     result["game_input"]=pvz::game_input::snapshot(a,board_id(b),main_thread.load());
+    result["dave_dialogue"]=dave_dialogue(a);
     result["ui"]=pvz::ui_controls::snapshot(a,ui_scope(),main_thread.load());
     if(ui==1)result["selector"]=pvz::selector_controls::snapshot(a,ui_scope(),main_thread.load());
     try { result["profiles"]=pvz::profiles::snapshot(a); }
@@ -266,12 +385,20 @@ json snapshot() {
         {"adventure_completions",read<int>(profile+0x58)},{"coins",read<int>(profile+0x54)*10}};
     uintptr_t chooser=read<uint32_t>(a+0x874);
     if(ui==2 && chooser && readable(chooser,0xd44)) {
-        result["chooser"]={{"selected",read<int>(chooser+0xd3c)},{"in_flight",read<int>(chooser+0xd38)},
+        const bool visible=chooser_widget_visible(ui,chooser);
+        const bool can_select=chooser_can_select(b,ui,chooser,
+            result["dialogs"].value("dialog_count",0)==0);
+        result["chooser"]={{"visible",visible},{"can_select",can_select},
+            {"selected",read<int>(chooser+0xd3c)},{"in_flight",read<int>(chooser+0xd38)},
             {"cards",json::array()}};
-        result["chooser"]["capacity"]=read<int>(read<uint32_t>(b+0x15c)+0x24);
+        uintptr_t bank=b?read<uint32_t>(b+0x15c):0;
+        if(bank&&readable(bank,0x28))result["chooser"]["capacity"]=read<int>(bank+0x24);
         for(int type=0;type<=48;++type) {
             uintptr_t item=chooser+0xbc+type*0x3c;
-            result["chooser"]["cards"].push_back({{"plant_type",type},{"state",read<int>(item+0x24)},
+            const bool available=seed_available(a,type);
+            const int state=read<int>(item+0x24);
+            result["chooser"]["cards"].push_back({{"plant_type",type},{"state",state},
+                {"available",available},{"can_select",can_select&&available&&state==3&&type!=48},
                 {"bank_index",read<int>(item+0x28)}});
         }
     }
@@ -418,6 +545,12 @@ json action(const json& args) {
         auto request=args;request.erase("type");request.erase("board_id");
         return pvz::game_input::action(a,request,board_id(board()),main_thread.load());
     }
+    if(type=="hammer_zombie") {
+        if(args.at("board_id").get<std::string>()!=board_id(board()))
+            throw std::runtime_error("The requested board is no longer current.");
+        auto request=args;request.erase("type");request.erase("board_id");
+        return pvz::game_input::hammer(a,request,board_id(board()),main_thread.load());
+    }
     if(type=="click_to_start"||type=="quit_open"||type=="quit_cancel"||type=="quit_confirm"||type=="credits_skip")
         return pvz::lifecycle_controls::action(a,type,args.value("confirm",false));
     if(type=="open_menu")return pvz::menu::open_options(a);
@@ -489,10 +622,11 @@ json action(const json& args) {
         pvz::profiles::authorize_test_profile(a,read<uint32_t>(profile+0x20),"delete");
         return pvz::garden::sell_plant(a,id);
     }
-    if(type=="open_shop"||type=="shop_buy"||type=="close_shop"||type=="shop_page") {
+    if(type=="open_shop"||type=="shop_buy"||type=="close_shop"||type=="shop_page"||type=="shop_advance_dialogue") {
         if(type=="open_shop") {
             uintptr_t profile=read<uint32_t>(a+0x94c);
-            if(!profile||read<int>(profile+0x58)<1)throw std::runtime_error("Shop unlock check is currently supported for completed Adventure profiles only.");
+            if(!profile || !(read<int>(profile+0x58)>0 || read<uint8_t>(profile+0x374)!=0 || read<int>(profile+0x50)>=25))
+                throw std::runtime_error("The game's ordinary store unlock requirements are not met.");
         }
         auto params=args;params.erase("type");
         if(type=="shop_buy") {
@@ -582,9 +716,11 @@ json action(const json& args) {
     }
     if(type=="choose_cards") {
         uintptr_t chooser=read<uint32_t>(a+0x874);
-        if(ui!=2||!readable(chooser,0xd44))throw std::runtime_error("Seed chooser is not active.");
+        uintptr_t b=board();
+        if(!chooser_can_select(b,ui,chooser,pvz::menu::snapshot(a).value("dialog_count",0)==0))
+            throw std::runtime_error("Seed chooser is hidden, unavailable, or blocked by a dialog.");
         if(read<int>(chooser+0xd38)!=0)throw std::runtime_error("Wait until card selection animation finishes.");
-        uintptr_t b=board(),bank=read<uint32_t>(b+0x15c);
+        uintptr_t bank=read<uint32_t>(b+0x15c);
         int capacity=read<int>(bank+0x24),selected=read<int>(chooser+0xd3c);
         auto values=args.at("plants");
         if(!values.is_array()||values.empty()||values.size()>10||selected+(int)values.size()>capacity)
@@ -603,7 +739,14 @@ json action(const json& args) {
     }
     if(type=="start_level") {
         uintptr_t chooser=read<uint32_t>(a+0x874),b=board();
-        if(ui!=2||!readable(chooser,0xd44)||!b)throw std::runtime_error("Seed chooser is not active.");
+        // Repeating the original callback resets the cutscene timer, making
+        // the chooser oscillate forever. Coalesce requests for this board.
+        if(ui!=2||!b||!chooser||!readable(chooser,0xd44))
+            throw std::runtime_error("Seed chooser is not active.");
+        const auto scope=board_id(b)+":"+hex(chooser);
+        if(started_chooser_scope==scope)return {{"accepted",true},{"transition_pending",true},{"already_started",true}};
+        if(!chooser_can_select(b,ui,chooser,pvz::menu::snapshot(a).value("dialog_count",0)==0))
+            throw std::runtime_error("Seed chooser is hidden, unavailable, or blocked by a dialog.");
         int count=read<int>(read<uint32_t>(b+0x15c)+0x24);
         if(read<int>(chooser+0xd38)!=0||read<int>(chooser+0xd3c)!=count)
             throw std::runtime_error("Fill every seed slot and wait for selection animation.");
@@ -612,13 +755,22 @@ json action(const json& args) {
             for(int t=0;t<49;++t){uintptr_t s=chooser+0xbc+t*0x3c;if(read<int>(s+0x24)==1&&read<int>(s+0x28)==slot)found=true;}
             if(!found)throw std::runtime_error("Seed bank selection is not settled.");
         }
-        start_chooser(chooser);return {{"accepted",true},{"transition_pending",true}};
+        start_chooser(chooser);
+        started_chooser_scope=scope;
+        return {{"accepted",true},{"transition_pending",true}};
     }
     if(type=="continue") {
         if(pvz::continue_dialog::is_open(a))return pvz::continue_dialog::continue_saved_game(a);
         uintptr_t award=read<uint32_t>(a+0x878);
         if(ui!=5||!readable(award,0x30))throw std::runtime_error("No level award is ready.");
-        continue_award(award);return {{"accepted",true},{"transition_pending",true}};
+        if(pvz::menu::snapshot(a).value("dialog_count",0)!=0)
+            throw std::runtime_error("Close the active dialog before continuing the Award screen.");
+        auto& job=deferred_award_continue;
+        if(job.app==a&&job.award==award&&job.state!=AwardContinueState::idle)
+            throw std::runtime_error("Continue was already queued or invoked for this Award screen; do not retry it.");
+        job.app=a;job.award=award;job.ready_at=GetTickCount64()+100;
+        job.state=AwardContinueState::pending;job.error.clear();
+        return {{"accepted",true},{"transition_pending",true},{"queued",true}};
     }
     throw std::runtime_error("Unsupported native action: "+type);
 }
@@ -676,7 +828,7 @@ json level_catalog() {
 }
 json dispatch(const std::string& op,const json& args) {
     if(GetCurrentThreadId()!=main_thread.load())throw std::runtime_error("Game call refused outside the main update thread.");
-    if(op=="hello")return {{"version","1.2.0.1096"},{"bridge_version","0.1.0"},{"ready",enabled.load()},
+    if(op=="hello")return {{"version","1.2.0.1096"},{"bridge_version","0.1.1"},{"ready",enabled.load()},
         {"process",{{"pid",GetCurrentProcessId()}}},{"capabilities",capabilities()},
         {"main_thread_id",main_thread.load()},{"bridge_ticks",main_calls.load()},
         {"control_backend","game_main_thread"},{"implementation_stage","verified_core_actions"}};

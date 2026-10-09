@@ -90,6 +90,7 @@ def test_plan_stops_after_board_identity_changes():
     {"type": "garden_move", "plant_id": 2**32 - 1, "row": 1, "col": 2},
     {"type": "shop_buy", "item_id": 3, "quantity": 1, "max_total_cost": 100},
     {"type": "close_shop"},
+    {"type": "shop_advance_dialogue"},
 ])
 def test_garden_and_shop_actions_validate_as_proposals_only(action):
     template = copy.deepcopy(EXAMPLE)
@@ -104,12 +105,39 @@ def test_garden_and_shop_actions_validate_as_proposals_only(action):
     {"type": "garden_care", "plant_id": 2**32, "tool": "water"},
     {"type": "garden_care", "plant_id": 42, "tool": "spray"},
     {"type": "shop_page", "page": -1},
+    {"type": "shop_advance_dialogue", "item_id": 24},
     {"type": "shop_page", "page": 4},
     {"type": "shop_buy", "item_id": 3, "quantity": 11, "max_total_cost": 100},
     {"type": "shop_buy", "item_id": 3, "quantity": 2, "max_total_cost": 100},
     {"type": "shop_buy", "item_id": 3, "quantity": 1, "max_total_cost": -1},
 ])
 def test_garden_and_shop_actions_reject_invalid_parameters(action):
+    template = copy.deepcopy(EXAMPLE)
+    template["actions"] = [{"action": action}]
+    with pytest.raises(TemplateError):
+        validate_template(template)
+
+
+@pytest.mark.parametrize("entity_id", [1, 2**32 - 1])
+def test_hammer_zombie_action_validates_board_and_unsigned_entity_id(entity_id):
+    template = copy.deepcopy(EXAMPLE)
+    action = {"type": "hammer_zombie", "board_id": "board-current", "entity_id": entity_id}
+    template["actions"] = [{"action": action}]
+    assert validate_template(template)["actions"][0]["action"] == action
+
+
+@pytest.mark.parametrize("action", [
+    {"type": "hammer_zombie", "board_id": "", "entity_id": 1},
+    {"type": "hammer_zombie", "board_id": "x" * 129, "entity_id": 1},
+    {"type": "hammer_zombie", "board_id": 12, "entity_id": 1},
+    {"type": "hammer_zombie", "entity_id": 1},
+    {"type": "hammer_zombie", "board_id": "board-current", "entity_id": 0},
+    {"type": "hammer_zombie", "board_id": "board-current", "entity_id": 2**32},
+    {"type": "hammer_zombie", "board_id": "board-current", "entity_id": True},
+    {"type": "hammer_zombie", "board_id": "board-current", "entity_id": "7"},
+    {"type": "hammer_zombie", "board_id": "board-current", "entity_id": 7, "row": 1},
+])
+def test_hammer_zombie_action_rejects_invalid_or_extra_fields(action):
     template = copy.deepcopy(EXAMPLE)
     template["actions"] = [{"action": action}]
     with pytest.raises(TemplateError):

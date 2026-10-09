@@ -2,6 +2,10 @@
 
 [Download v0.1.0 / 下载首版安装器](https://github.com/yqz314159265-cyber/pvz-ai-bridge/releases/tag/v0.1.0)
 
+The `main` branch contains v0.1.1 source fixes; the downloadable installer remains v0.1.0. Supervised testing reached the 4-1 award screen and stopped there. See [test findings / 测试与错误记录](docs/FULL_ADVENTURE_TEST_2026-10-09.md) and [validation / 验证范围](VALIDATION.md).
+
+`main` 分支包含 v0.1.1 源码修复，下载的安装器仍为 v0.1.0。受监督测试已到达 4-1 奖励界面并停下；具体改动、介入与未验证项见上方记录。
+
 ## English
 
 PvZ AI v0.1.0 is a Windows control-bridge preview for Steam Plants vs. Zombies GOTY 1.2.0.1096 (x86). The per-user installer bundles the runtime and exposes a desktop launcher, CLI, loopback HTTP API, and stdio MCP commands. On first launch, choose Simplified Chinese or English; the UI then uses one language at a time. The game must be installed separately through Steam and run in a visible desktop session.

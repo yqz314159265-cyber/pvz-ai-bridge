@@ -43,6 +43,25 @@ TEXT = {
 }
 
 
+def _load_language_preference() -> str | None:
+    """Return a saved UI language, or None when no valid choice is available."""
+    try:
+        value = json.loads((user_data_dir() / "language.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    language = value.get("language") if isinstance(value, dict) else None
+    return language if isinstance(language, str) and language in TEXT else None
+
+
+def _save_language_preference(language: str) -> None:
+    """Persist the launcher language independently of installer settings."""
+    if language not in TEXT:
+        raise ValueError(f"Unsupported language: {language}")
+    path = user_data_dir() / "language.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"language": language}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def run_launcher(port: int = 8765) -> int:
     import tkinter as tk
     from tkinter import ttk, scrolledtext, messagebox
@@ -54,26 +73,33 @@ def run_launcher(port: int = 8765) -> int:
     from .__main__ import _load_or_create_token
 
     root = tk.Tk()
-    root.title("Language / 语言")
-    root.geometry("360x185")
-    root.resizable(False, False)
-    selected = tk.StringVar(value="zh")
-    selection = ttk.Frame(root, padding=22)
-    selection.pack(fill="both", expand=True)
-    ttk.Label(selection, text="请选择语言 / Choose your language").pack(pady=(0, 12))
-    ttk.Radiobutton(selection, text="简体中文", variable=selected, value="zh").pack(anchor="w")
-    ttk.Radiobutton(selection, text="English", variable=selected, value="en").pack(anchor="w")
-    ready = tk.BooleanVar(value=False)
-    ttk.Button(selection, text="继续 / Continue", command=lambda: ready.set(True)).pack(pady=12)
-    root.protocol("WM_DELETE_WINDOW", lambda: (ready.set(True), selected.set("")))
-    root.wait_variable(ready)
-    language = selected.get()
-    if not language:
-        root.destroy()
-        return 0
-    selection.destroy()
+    language = _load_language_preference()
+    if language is None:
+        root.title("Language / 语言")
+        root.geometry("360x185")
+        root.resizable(False, False)
+        selected = tk.StringVar(value="zh")
+        selection = ttk.Frame(root, padding=22)
+        selection.pack(fill="both", expand=True)
+        ttk.Label(selection, text="请选择语言 / Choose your language").pack(pady=(0, 12))
+        ttk.Radiobutton(selection, text="简体中文", variable=selected, value="zh").pack(anchor="w")
+        ttk.Radiobutton(selection, text="English", variable=selected, value="en").pack(anchor="w")
+        ready = tk.BooleanVar(value=False)
+        ttk.Button(selection, text="继续 / Continue", command=lambda: ready.set(True)).pack(pady=12)
+        root.protocol("WM_DELETE_WINDOW", lambda: (ready.set(True), selected.set("")))
+        root.wait_variable(ready)
+        language = selected.get()
+        if not language:
+            root.destroy()
+            return 0
+        try:
+            _save_language_preference(language)
+        except OSError:
+            # A read-only or unavailable data directory should not block launch.
+            pass
+        selection.destroy()
     t = TEXT[language]
-    root.title(t["title"] + " 0.1.0")
+    root.title(t["title"] + " 0.1.1")
     root.geometry("810x570")
     root.minsize(760, 510)
     root.resizable(True, True)
